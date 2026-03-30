@@ -34,7 +34,19 @@ defmodule SymphonyElixir.AgentRunner do
 
   # Pull latest master into the feature branch. If there are conflicts,
   # let the LLM agent resolve them in a dedicated turn.
+  # When auto_merge is disabled (e.g. for GitHub PR-based workflows),
+  # skip the merge pipeline entirely — the after_run hook handles pushing
+  # the feature branch and creating a PR for human review.
   defp maybe_merge_with_conflict_resolution(workspace, issue, agent_update_recipient, opts) do
+    if Config.auto_merge?() do
+      do_merge_pipeline(workspace, issue, agent_update_recipient, opts)
+    else
+      Logger.info("Auto-merge disabled; skipping merge pipeline for #{issue_context(issue)}")
+      :ok
+    end
+  end
+
+  defp do_merge_pipeline(workspace, issue, agent_update_recipient, opts) do
     case Workspace.pull_main_into_branch(workspace) do
       :ok ->
         Logger.info("Clean merge of master into feature branch for #{issue_context(issue)}")
@@ -214,32 +226,37 @@ defmodule SymphonyElixir.AgentRunner do
            ) do
       Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
 
-      case continue_with_issue?(issue, issue_state_fetcher) do
-        {:continue, refreshed_issue} when turn_number < max_turns ->
-          Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
+      if agent_signaled_completion?(workspace) do
+        Logger.info("Agent signaled completion (pr-body.md exists) for #{issue_context(issue)} after turn #{turn_number}/#{max_turns}")
+        :ok
+      else
+        case continue_with_issue?(issue, issue_state_fetcher) do
+          {:continue, refreshed_issue} when turn_number < max_turns ->
+            Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
 
-          do_run_agent_turns(
-            adapter,
-            session,
-            workspace,
-            refreshed_issue,
-            agent_update_recipient,
-            opts,
-            issue_state_fetcher,
-            turn_number + 1,
-            max_turns
-          )
+            do_run_agent_turns(
+              adapter,
+              session,
+              workspace,
+              refreshed_issue,
+              agent_update_recipient,
+              opts,
+              issue_state_fetcher,
+              turn_number + 1,
+              max_turns
+            )
 
-        {:continue, refreshed_issue} ->
-          Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
+          {:continue, refreshed_issue} ->
+            Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
 
-          :ok
+            :ok
 
-        {:done, _refreshed_issue} ->
-          :ok
+          {:done, _refreshed_issue} ->
+            :ok
 
-        {:error, reason} ->
-          {:error, reason}
+          {:error, reason} ->
+            {:error, reason}
+        end
       end
     end
   end
@@ -290,6 +307,10 @@ defmodule SymphonyElixir.AgentRunner do
     state_name
     |> String.trim()
     |> String.downcase()
+  end
+
+  defp agent_signaled_completion?(workspace) do
+    File.exists?(Path.join(workspace, ".symphony/pr-body.md"))
   end
 
   defp issue_context(%Issue{id: issue_id, identifier: identifier}) do

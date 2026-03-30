@@ -167,11 +167,15 @@ defmodule SymphonyElixir.Workspace do
     timeout_ms = Config.workspace_hooks()[:timeout_ms]
 
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace}")
+    File.write!("/tmp/symphony-hook-debug.log", "hook=#{hook_name} workspace=#{workspace} id=#{issue_context.issue_identifier}\n", [:append])
 
-    env = [
+    extra_env = [
       {"SYMPHONY_ISSUE_ID", issue_context.issue_identifier || ""},
       {"SYMPHONY_ISSUE_TITLE", issue_context[:issue_title] || ""}
     ]
+
+    # Merge with system environment so hooks have PATH, GH_TOKEN, HOME, etc.
+    env = System.get_env() |> Map.new() |> Map.merge(Map.new(extra_env)) |> Enum.to_list()
 
     task =
       Task.async(fn ->

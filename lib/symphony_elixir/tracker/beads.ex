@@ -184,7 +184,7 @@ defmodule SymphonyElixir.Tracker.Beads do
     if is_nil(br_path) do
       {:error, :br_not_installed}
     else
-      case System.cmd(br_path, args ++ ["--no-color"], cd: beads_root(), stderr_to_stdout: true) do
+      case System.cmd(br_path, args, cd: beads_root(), stderr_to_stdout: true) do
         {output, 0} -> {:ok, output}
         {output, code} -> {:error, {:br_exit, code, output}}
       end

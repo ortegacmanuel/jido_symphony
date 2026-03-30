@@ -54,6 +54,7 @@ defmodule SymphonyElixir.Config do
                                  api_key: [type: {:or, [:string, nil]}, default: nil],
                                  project_slug: [type: {:or, [:string, nil]}, default: nil],
                                  assignee: [type: {:or, [:string, nil]}, default: nil],
+                                 github_repo: [type: {:or, [:string, nil]}, default: nil],
                                  active_states: [
                                    type: {:list, :string},
                                    default: @default_active_states
@@ -101,6 +102,10 @@ defmodule SymphonyElixir.Config do
                                  max_concurrent_agents_by_state: [
                                    type: {:map, :string, :pos_integer},
                                    default: %{}
+                                 ],
+                                 auto_merge: [
+                                   type: :boolean,
+                                   default: true
                                  ]
                                ]
                              ],
@@ -203,6 +208,20 @@ defmodule SymphonyElixir.Config do
   @spec linear_project_slug() :: String.t() | nil
   def linear_project_slug do
     get_in(validated_workflow_options(), [:tracker, :project_slug])
+  end
+
+  @spec github_repo() :: String.t() | nil
+  def github_repo do
+    get_in(validated_workflow_options(), [:tracker, :github_repo])
+  end
+
+  @spec auto_merge?() :: boolean()
+  def auto_merge? do
+    case get_in(validated_workflow_options(), [:agent, :auto_merge]) do
+      false -> false
+      "false" -> false
+      _ -> true
+    end
   end
 
   @spec linear_assignee() :: String.t() | nil
@@ -497,6 +516,7 @@ defmodule SymphonyElixir.Config do
     |> put_if_present(:endpoint, scalar_string_value(Map.get(section, "endpoint")))
     |> put_if_present(:api_key, binary_value(Map.get(section, "api_key"), allow_empty: true))
     |> put_if_present(:project_slug, scalar_string_value(Map.get(section, "project_slug")))
+    |> put_if_present(:github_repo, scalar_string_value(Map.get(section, "github_repo")))
     |> put_if_present(:active_states, csv_value(Map.get(section, "active_states")))
     |> put_if_present(:terminal_states, csv_value(Map.get(section, "terminal_states")))
   end
@@ -521,6 +541,7 @@ defmodule SymphonyElixir.Config do
       :max_concurrent_agents_by_state,
       state_limits_value(Map.get(section, "max_concurrent_agents_by_state"))
     )
+    |> put_if_present(:auto_merge, boolean_value(Map.get(section, "auto_merge")))
   end
 
   defp extract_codex_options(section) do
@@ -562,6 +583,12 @@ defmodule SymphonyElixir.Config do
 
   defp put_if_present(map, _key, :omit), do: map
   defp put_if_present(map, key, value), do: Map.put(map, key, value)
+
+  defp boolean_value(nil), do: :omit
+  defp boolean_value(value) when is_boolean(value), do: value
+  defp boolean_value("true"), do: true
+  defp boolean_value("false"), do: false
+  defp boolean_value(_), do: :omit
 
   defp scalar_string_value(nil), do: :omit
   defp scalar_string_value(value) when is_binary(value), do: String.trim(value)
