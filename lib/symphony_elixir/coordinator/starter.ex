@@ -16,6 +16,7 @@ defmodule SymphonyElixir.Coordinator.Starter do
   alias SymphonyElixir.Coordinator
 
   @default_poll_interval_ms 30_000
+  @default_review_poll_interval_ms 60_000
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -36,14 +37,17 @@ defmodule SymphonyElixir.Coordinator.Starter do
     case start_coordinator_agent(agent_id, project_id) do
       {:ok, agent_pid} ->
         Logger.info("Coordinator.Starter[#{project_id}]: agent started pid=#{inspect(agent_pid)}")
+        review_interval = Keyword.get(opts, :review_poll_interval_ms, @default_review_poll_interval_ms)
         schedule_poll(poll_interval)
+        schedule_review_poll(review_interval)
 
         {:ok,
          %{
            project_id: project_id,
            agent_id: agent_id,
            agent_pid: agent_pid,
-           poll_interval_ms: poll_interval
+           poll_interval_ms: poll_interval,
+           review_poll_interval_ms: review_interval
          }}
 
       {:error, reason} ->
@@ -94,6 +98,21 @@ defmodule SymphonyElixir.Coordinator.Starter do
     {:noreply, state}
   end
 
+  def handle_info(:review_poll, %{agent_pid: nil} = state) do
+    # Agent not started, skip review poll
+    schedule_review_poll(state.review_poll_interval_ms)
+    {:noreply, state}
+  end
+
+  def handle_info(:review_poll, %{agent_pid: pid} = state) when is_pid(pid) do
+    if Process.alive?(pid) do
+      send_review_poll_signal(pid)
+    end
+
+    schedule_review_poll(state.review_poll_interval_ms)
+    {:noreply, state}
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
@@ -130,7 +149,22 @@ defmodule SymphonyElixir.Coordinator.Starter do
     Jido.AgentServer.cast(agent_pid, signal)
   end
 
+  defp send_review_poll_signal(agent_pid) do
+    {:ok, signal} =
+      Jido.Signal.new(
+        "coordinator.review_poll",
+        %{},
+        source: "/coordinator/starter"
+      )
+
+    Jido.AgentServer.cast(agent_pid, signal)
+  end
+
   defp schedule_poll(interval_ms) do
     Process.send_after(self(), :poll, interval_ms)
+  end
+
+  defp schedule_review_poll(interval_ms) do
+    Process.send_after(self(), :review_poll, interval_ms)
   end
 end

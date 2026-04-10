@@ -16,6 +16,7 @@ defmodule SymphonyElixir.Coordinator.Agent do
   ## Signal Routes
 
   - `coordinator.poll` → Full analysis pipeline (fetch → classify → group → dispatch)
+  - `coordinator.review_poll` → PR review pipeline (find → extract comments → dispatch fix)
   - `coordinator.du_completed` → Mark DU done, unblock dependents
   - `coordinator.du_failed` → Cascade failure to dependent DUs
 
@@ -39,6 +40,10 @@ defmodule SymphonyElixir.Coordinator.Agent do
       issues: [type: {:list, :any}, default: []],
       slice_issues: [type: {:list, :any}, default: []],
       other_issues: [type: {:list, :any}, default: []],
+
+      # Review tracking
+      prs_awaiting_changes: [type: {:list, :any}, default: []],
+      review_fixes_dispatched: [type: :integer, default: 0],
 
       # Delivery units
       delivery_units: [type: {:map, :string, :any}, default: %{}],
@@ -70,6 +75,12 @@ defmodule SymphonyElixir.Coordinator.Agent do
         Actions.IdentifyDeliveryUnits,
         Actions.BuildTaskDAG,
         Actions.DispatchReadyUnits
+      ]},
+
+      # PR review pipeline: find PRs with changes_requested → dispatch fix agents
+      {"coordinator.review_poll", [
+        Actions.FetchPRsAwaitingChanges,
+        Actions.DispatchReviewFix
       ]},
 
       # Delivery unit lifecycle events
