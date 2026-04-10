@@ -17,6 +17,8 @@ defmodule SymphonyElixir.Coordinator.Starter do
 
   @default_poll_interval_ms 30_000
   @default_review_poll_interval_ms 60_000
+  # Feedback runs every 6 hours by default (less frequent, LLM-intensive)
+  @default_feedback_poll_interval_ms 6 * 60 * 60 * 1_000
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -38,8 +40,10 @@ defmodule SymphonyElixir.Coordinator.Starter do
       {:ok, agent_pid} ->
         Logger.info("Coordinator.Starter[#{project_id}]: agent started pid=#{inspect(agent_pid)}")
         review_interval = Keyword.get(opts, :review_poll_interval_ms, @default_review_poll_interval_ms)
+        feedback_interval = Keyword.get(opts, :feedback_poll_interval_ms, @default_feedback_poll_interval_ms)
         schedule_poll(poll_interval)
         schedule_review_poll(review_interval)
+        schedule_feedback_poll(feedback_interval)
 
         {:ok,
          %{
@@ -47,7 +51,8 @@ defmodule SymphonyElixir.Coordinator.Starter do
            agent_id: agent_id,
            agent_pid: agent_pid,
            poll_interval_ms: poll_interval,
-           review_poll_interval_ms: review_interval
+           review_poll_interval_ms: review_interval,
+           feedback_poll_interval_ms: feedback_interval
          }}
 
       {:error, reason} ->
@@ -113,6 +118,20 @@ defmodule SymphonyElixir.Coordinator.Starter do
     {:noreply, state}
   end
 
+  def handle_info(:feedback_poll, %{agent_pid: nil} = state) do
+    schedule_feedback_poll(state.feedback_poll_interval_ms)
+    {:noreply, state}
+  end
+
+  def handle_info(:feedback_poll, %{agent_pid: pid} = state) when is_pid(pid) do
+    if Process.alive?(pid) do
+      send_feedback_poll_signal(pid)
+    end
+
+    schedule_feedback_poll(state.feedback_poll_interval_ms)
+    {:noreply, state}
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
@@ -164,7 +183,22 @@ defmodule SymphonyElixir.Coordinator.Starter do
     Process.send_after(self(), :poll, interval_ms)
   end
 
+  defp send_feedback_poll_signal(agent_pid) do
+    {:ok, signal} =
+      Jido.Signal.new(
+        "coordinator.feedback_poll",
+        %{},
+        source: "/coordinator/starter"
+      )
+
+    Jido.AgentServer.cast(agent_pid, signal)
+  end
+
   defp schedule_review_poll(interval_ms) do
     Process.send_after(self(), :review_poll, interval_ms)
+  end
+
+  defp schedule_feedback_poll(interval_ms) do
+    Process.send_after(self(), :feedback_poll, interval_ms)
   end
 end

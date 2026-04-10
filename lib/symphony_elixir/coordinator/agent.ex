@@ -17,6 +17,7 @@ defmodule SymphonyElixir.Coordinator.Agent do
 
   - `coordinator.poll` → Full analysis pipeline (fetch → classify → group → dispatch)
   - `coordinator.review_poll` → PR review pipeline (find → extract comments → dispatch fix)
+  - `coordinator.feedback_poll` → Feedback pipeline (analyze patterns → classify gaps → propose updates)
   - `coordinator.du_completed` → Mark DU done, unblock dependents
   - `coordinator.du_failed` → Cascade failure to dependent DUs
 
@@ -44,6 +45,11 @@ defmodule SymphonyElixir.Coordinator.Agent do
       # Review tracking
       prs_awaiting_changes: [type: {:list, :any}, default: []],
       review_fixes_dispatched: [type: :integer, default: 0],
+
+      # Feedback tracking
+      review_patterns: [type: {:list, :any}, default: []],
+      guidance_gaps: [type: {:list, :any}, default: []],
+      guidance_updates_proposed: [type: :integer, default: 0],
 
       # Delivery units
       delivery_units: [type: {:map, :string, :any}, default: %{}],
@@ -81,6 +87,13 @@ defmodule SymphonyElixir.Coordinator.Agent do
       {"coordinator.review_poll", [
         Actions.FetchPRsAwaitingChanges,
         Actions.DispatchReviewFix
+      ]},
+
+      # Feedback pipeline: analyze review history → classify gaps → propose guidance updates
+      {"coordinator.feedback_poll", [
+        Actions.AnalyzeReviewPatterns,
+        Actions.ClassifyGuidanceGap,
+        Actions.ProposeGuidanceUpdate
       ]},
 
       # Delivery unit lifecycle events
