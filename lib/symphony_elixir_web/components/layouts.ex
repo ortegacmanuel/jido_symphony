@@ -135,12 +135,37 @@ defmodule SymphonyElixirWeb.Layouts do
 
   @spec app(map()) :: Phoenix.LiveView.Rendered.t()
   def app(assigns) do
+    projects = SymphonyElixir.ProjectManager.list_projects()
+    current_project = Map.get(assigns, :current_project, List.first(projects))
+
+    assigns =
+      assigns
+      |> assign(:projects, projects)
+      |> assign(:current_project, current_project)
+
     ~H"""
     <nav style="display: flex; align-items: center; gap: 1.5rem; padding: 0.6rem 1.5rem; background: #0f172a; border-bottom: 1px solid #1e293b; font-size: 0.85rem;">
-      <a href="/" style="color: #e2e8f0; text-decoration: none; font-weight: 700; font-size: 0.95rem; margin-right: 0.5rem;">⚡ Symphony</a>
-      <a href="/" style={"color: #{nav_color(assigns, "/")}; text-decoration: none;"}>Dashboard</a>
-      <a href="/issues" style={"color: #{nav_color(assigns, "/issues")}; text-decoration: none;"}>Issues</a>
-      <a href="/projects/new" style={"color: #{nav_color(assigns, "/projects/new")}; text-decoration: none;"}>+ New Project</a>
+      <a href="/" style="color: #e2e8f0; text-decoration: none; font-weight: 700; font-size: 0.95rem; margin-right: 0.5rem;">Symphony</a>
+
+      <%= if length(@projects) > 0 do %>
+        <span style="display: flex; align-items: center; gap: 0.4rem; color: #94a3b8;">
+          <span style="font-size: 0.75rem;">PROJECT</span>
+          <%= for project_id <- @projects do %>
+            <a
+              href={"/?project=#{project_id}"}
+              style={"padding: 0.2rem 0.6rem; border-radius: 4px; text-decoration: none; font-size: 0.8rem; #{project_style(@current_project, project_id)}"}
+            >
+              {project_id}
+            </a>
+          <% end %>
+        </span>
+      <% end %>
+
+      <span style="flex: 1;"></span>
+
+      <a href={"/?project=#{@current_project}"} style={"color: #{nav_color(assigns, "/")}; text-decoration: none;"}>Dashboard</a>
+      <a href={"/issues?project=#{@current_project}"} style={"color: #{nav_color(assigns, "/issues")}; text-decoration: none;"}>Issues</a>
+      <a href="/projects/new" style={"color: #{nav_color(assigns, "/projects/new")}; text-decoration: none;"}>+ New</a>
     </nav>
     <main class="app-shell">
       {@inner_content}
@@ -151,5 +176,13 @@ defmodule SymphonyElixirWeb.Layouts do
   defp nav_color(assigns, path) do
     current = Map.get(assigns, :current_path, "")
     if current == path, do: "#60a5fa", else: "#94a3b8"
+  end
+
+  defp project_style(current, project_id) do
+    if current == project_id do
+      "background: #1e3a5f; color: #60a5fa; font-weight: 600;"
+    else
+      "background: #1e293b; color: #94a3b8;"
+    end
   end
 end

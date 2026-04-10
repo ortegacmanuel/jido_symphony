@@ -10,16 +10,21 @@ defmodule SymphonyElixirWeb.IssuesLive do
   @refresh_ms 5_000
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(params, _session, socket) do
+    project_id = params["project"] || default_project()
+
     if connected?(socket), do: schedule_refresh()
 
     socket =
       socket
+      |> assign(:project_id, project_id)
+      |> assign(:current_project, project_id)
       |> assign(:issues, load_issues())
       |> assign(:filter, "all")
       |> assign(:form, to_form(%{"title" => "", "description" => "", "type" => "task", "priority" => "", "labels" => ""}))
       |> assign(:flash_msg, nil)
       |> assign(:creating, false)
+      |> assign(:current_path, "/issues")
 
     {:ok, socket}
   end
@@ -302,6 +307,13 @@ defmodule SymphonyElixirWeb.IssuesLive do
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(s) when is_binary(s), do: String.trim(s)
+
+  defp default_project do
+    case SymphonyElixir.ProjectManager.list_projects() do
+      [first | _] -> first
+      [] -> nil
+    end
+  end
 
   defp schedule_refresh, do: Process.send_after(self(), :refresh_issues, @refresh_ms)
 end

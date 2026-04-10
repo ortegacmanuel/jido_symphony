@@ -9,10 +9,14 @@ defmodule SymphonyElixirWeb.DashboardLive do
   @runtime_tick_ms 1_000
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(params, _session, socket) do
+    project_id = params["project"] || default_project()
+
     socket =
       socket
-      |> assign(:payload, load_payload())
+      |> assign(:project_id, project_id)
+      |> assign(:current_project, project_id)
+      |> assign(:payload, load_payload(project_id))
       |> assign(:now, DateTime.utc_now())
       |> assign(:current_path, "/")
 
@@ -34,7 +38,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   def handle_info(:observability_updated, socket) do
     {:noreply,
      socket
-     |> assign(:payload, load_payload())
+     |> assign(:payload, load_payload(socket.assigns.project_id))
      |> assign(:now, DateTime.utc_now())}
   end
 
@@ -253,12 +257,22 @@ defmodule SymphonyElixirWeb.DashboardLive do
     """
   end
 
-  defp load_payload do
-    Presenter.state_payload(orchestrator(), snapshot_timeout_ms())
+  defp load_payload(project_id) do
+    Presenter.state_payload(orchestrator(project_id), snapshot_timeout_ms())
   end
 
-  defp orchestrator do
-    Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator
+  defp orchestrator(project_id) do
+    case SymphonyElixir.ProjectRegistry.whereis(project_id, :orchestrator) do
+      pid when is_pid(pid) -> pid
+      nil -> Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator
+    end
+  end
+
+  defp default_project do
+    case SymphonyElixir.ProjectManager.list_projects() do
+      [first | _] -> first
+      [] -> nil
+    end
   end
 
   defp snapshot_timeout_ms do
