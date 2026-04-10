@@ -1,13 +1,14 @@
 defmodule SymphonyElixir.Coordinator.Starter do
   @moduledoc """
-  Starts and manages the CoordinatorAgent for a project.
+  Starts and manages three Jido Agents per project:
 
-  This is a simple GenServer that:
-  1. On init, starts a CoordinatorAgent via the Jido runtime
-  2. Schedules periodic poll signals to the coordinator
-  3. Stops the coordinator agent on termination
+  1. **CoordinatorAgent** — triages issues, groups DUs, dispatches work (every 30s)
+  2. **ReviewAgent** — monitors PR reviews, dispatches fix agents (every 60s)
+  3. **FeedbackAgent** — analyzes review history, proposes guidance updates (every 6h)
 
-  Lives in the ProjectSupervisor alongside WorkflowStore and Orchestrator.
+  Each agent is an independent Jido AgentServer process. If one crashes,
+  the others continue. The Starter monitors all three and restarts any
+  that die.
   """
 
   use GenServer
@@ -17,8 +18,12 @@ defmodule SymphonyElixir.Coordinator.Starter do
 
   @default_poll_interval_ms 30_000
   @default_review_poll_interval_ms 60_000
-  # Feedback runs every 6 hours by default (less frequent, LLM-intensive)
   @default_feedback_poll_interval_ms 6 * 60 * 60 * 1_000
+
+  defmodule AgentRef do
+    @moduledoc false
+    defstruct [:id, :module, :pid, :signal_type, :interval_ms]
+  end
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -32,173 +37,139 @@ defmodule SymphonyElixir.Coordinator.Starter do
   @impl true
   def init(opts) do
     project_id = Keyword.fetch!(opts, :project_id)
-    poll_interval = Keyword.get(opts, :poll_interval_ms, @default_poll_interval_ms)
 
-    agent_id = "coordinator-#{project_id}"
+    agents = [
+      %AgentRef{
+        id: "coordinator-#{project_id}",
+        module: Coordinator.Agent,
+        signal_type: "coordinator.poll",
+        interval_ms: Keyword.get(opts, :poll_interval_ms, @default_poll_interval_ms)
+      },
+      %AgentRef{
+        id: "review-#{project_id}",
+        module: Coordinator.ReviewAgent,
+        signal_type: "review.poll",
+        interval_ms: Keyword.get(opts, :review_poll_interval_ms, @default_review_poll_interval_ms)
+      },
+      %AgentRef{
+        id: "feedback-#{project_id}",
+        module: Coordinator.FeedbackAgent,
+        signal_type: "feedback.poll",
+        interval_ms: Keyword.get(opts, :feedback_poll_interval_ms, @default_feedback_poll_interval_ms)
+      }
+    ]
 
-    case start_coordinator_agent(agent_id, project_id) do
-      {:ok, agent_pid} ->
-        Logger.info("Coordinator.Starter[#{project_id}]: agent started pid=#{inspect(agent_pid)}")
-        review_interval = Keyword.get(opts, :review_poll_interval_ms, @default_review_poll_interval_ms)
-        feedback_interval = Keyword.get(opts, :feedback_poll_interval_ms, @default_feedback_poll_interval_ms)
-        schedule_poll(poll_interval)
-        schedule_review_poll(review_interval)
-        schedule_feedback_poll(feedback_interval)
+    # Start each agent and schedule its poll
+    started_agents =
+      Enum.map(agents, fn ref ->
+        case start_agent(ref, project_id) do
+          {:ok, pid} ->
+            schedule_poll(ref.id, ref.interval_ms)
+            Logger.info("Coordinator.Starter[#{project_id}]: #{ref.id} started pid=#{inspect(pid)}")
+            %{ref | pid: pid}
 
-        {:ok,
-         %{
-           project_id: project_id,
-           agent_id: agent_id,
-           agent_pid: agent_pid,
-           poll_interval_ms: poll_interval,
-           review_poll_interval_ms: review_interval,
-           feedback_poll_interval_ms: feedback_interval
-         }}
+          {:error, reason} ->
+            Logger.error("Coordinator.Starter[#{project_id}]: #{ref.id} failed: #{inspect(reason)}")
+            schedule_poll(ref.id, ref.interval_ms)
+            ref
+        end
+      end)
 
-      {:error, reason} ->
-        Logger.error(
-          "Coordinator.Starter[#{project_id}]: failed to start agent: #{inspect(reason)}"
-        )
-
-        # Don't crash the supervisor — start without coordinator
-        # It can be retried later
-        {:ok,
-         %{
-           project_id: project_id,
-           agent_id: agent_id,
-           agent_pid: nil,
-           poll_interval_ms: poll_interval
-         }}
-    end
+    {:ok, %{project_id: project_id, agents: started_agents}}
   end
 
   @impl true
-  def handle_info(:poll, %{agent_pid: nil} = state) do
-    # Agent not started, try again
-    case start_coordinator_agent(state.agent_id, state.project_id) do
-      {:ok, pid} ->
-        Logger.info("Coordinator.Starter[#{state.project_id}]: agent recovered pid=#{inspect(pid)}")
-        send_poll_signal(pid)
-        schedule_poll(state.poll_interval_ms)
-        {:noreply, %{state | agent_pid: pid}}
+  def handle_info({:poll, agent_id}, state) do
+    agent_ref = find_agent(state.agents, agent_id)
 
-      {:error, _} ->
-        schedule_poll(state.poll_interval_ms)
-        {:noreply, state}
-    end
-  end
+    if agent_ref do
+      agent_ref = maybe_recover_agent(agent_ref, state.project_id)
 
-  def handle_info(:poll, %{agent_pid: pid} = state) when is_pid(pid) do
-    if Process.alive?(pid) do
-      send_poll_signal(pid)
+      if agent_ref.pid && Process.alive?(agent_ref.pid) do
+        send_signal(agent_ref.pid, agent_ref.signal_type)
+      end
+
+      schedule_poll(agent_ref.id, agent_ref.interval_ms)
+      {:noreply, update_agent(state, agent_ref)}
     else
-      Logger.warning("Coordinator.Starter[#{state.project_id}]: agent pid dead, clearing")
-      state = %{state | agent_pid: nil}
-      send(self(), :poll)
       {:noreply, state}
-      |> then(fn _ -> nil end)
     end
-
-    schedule_poll(state.poll_interval_ms)
-    {:noreply, state}
-  end
-
-  def handle_info(:review_poll, %{agent_pid: nil} = state) do
-    # Agent not started, skip review poll
-    schedule_review_poll(state.review_poll_interval_ms)
-    {:noreply, state}
-  end
-
-  def handle_info(:review_poll, %{agent_pid: pid} = state) when is_pid(pid) do
-    if Process.alive?(pid) do
-      send_review_poll_signal(pid)
-    end
-
-    schedule_review_poll(state.review_poll_interval_ms)
-    {:noreply, state}
-  end
-
-  def handle_info(:feedback_poll, %{agent_pid: nil} = state) do
-    schedule_feedback_poll(state.feedback_poll_interval_ms)
-    {:noreply, state}
-  end
-
-  def handle_info(:feedback_poll, %{agent_pid: pid} = state) when is_pid(pid) do
-    if Process.alive?(pid) do
-      send_feedback_poll_signal(pid)
-    end
-
-    schedule_feedback_poll(state.feedback_poll_interval_ms)
-    {:noreply, state}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_reason, %{agent_pid: pid, agent_id: agent_id}) when is_pid(pid) do
-    Logger.info("Coordinator.Starter: stopping agent #{agent_id}")
+  def terminate(_reason, state) do
+    Enum.each(state.agents, fn ref ->
+      if ref.pid do
+        Logger.info("Coordinator.Starter: stopping #{ref.id}")
 
-    try do
-      SymphonyElixir.Jido.stop_agent(agent_id)
-    rescue
-      _ -> :ok
-    end
+        try do
+          SymphonyElixir.Jido.stop_agent(ref.id)
+        rescue
+          _ -> :ok
+        end
+      end
+    end)
 
     :ok
   end
 
-  def terminate(_reason, _state), do: :ok
+  # -- Private --
 
-  defp start_coordinator_agent(agent_id, project_id) do
+  defp start_agent(%AgentRef{id: id, module: module}, project_id) do
     SymphonyElixir.Jido.start_agent(
-      Coordinator.Agent,
-      id: agent_id,
+      module,
+      id: id,
       initial_state: %{project_id: project_id}
     )
   end
 
-  defp send_poll_signal(agent_pid) do
+  defp maybe_recover_agent(%AgentRef{pid: nil} = ref, project_id) do
+    case start_agent(ref, project_id) do
+      {:ok, pid} ->
+        Logger.info("Coordinator.Starter[#{project_id}]: #{ref.id} recovered pid=#{inspect(pid)}")
+        %{ref | pid: pid}
+
+      {:error, _} ->
+        ref
+    end
+  end
+
+  defp maybe_recover_agent(%AgentRef{pid: pid} = ref, project_id) do
+    if Process.alive?(pid) do
+      ref
+    else
+      Logger.warning("Coordinator.Starter[#{project_id}]: #{ref.id} pid dead, recovering")
+      maybe_recover_agent(%{ref | pid: nil}, project_id)
+    end
+  end
+
+  defp send_signal(pid, signal_type) do
     {:ok, signal} =
       Jido.Signal.new(
-        "coordinator.poll",
+        signal_type,
         %{},
         source: "/coordinator/starter"
       )
 
-    Jido.AgentServer.cast(agent_pid, signal)
+    Jido.AgentServer.cast(pid, signal)
   end
 
-  defp send_review_poll_signal(agent_pid) do
-    {:ok, signal} =
-      Jido.Signal.new(
-        "coordinator.review_poll",
-        %{},
-        source: "/coordinator/starter"
-      )
-
-    Jido.AgentServer.cast(agent_pid, signal)
+  defp schedule_poll(agent_id, interval_ms) do
+    Process.send_after(self(), {:poll, agent_id}, interval_ms)
   end
 
-  defp schedule_poll(interval_ms) do
-    Process.send_after(self(), :poll, interval_ms)
+  defp find_agent(agents, agent_id) do
+    Enum.find(agents, fn ref -> ref.id == agent_id end)
   end
 
-  defp send_feedback_poll_signal(agent_pid) do
-    {:ok, signal} =
-      Jido.Signal.new(
-        "coordinator.feedback_poll",
-        %{},
-        source: "/coordinator/starter"
-      )
+  defp update_agent(state, updated_ref) do
+    agents =
+      Enum.map(state.agents, fn ref ->
+        if ref.id == updated_ref.id, do: updated_ref, else: ref
+      end)
 
-    Jido.AgentServer.cast(agent_pid, signal)
-  end
-
-  defp schedule_review_poll(interval_ms) do
-    Process.send_after(self(), :review_poll, interval_ms)
-  end
-
-  defp schedule_feedback_poll(interval_ms) do
-    Process.send_after(self(), :feedback_poll, interval_ms)
+    %{state | agents: agents}
   end
 end
