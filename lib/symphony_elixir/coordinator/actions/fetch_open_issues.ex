@@ -17,7 +17,7 @@ defmodule SymphonyElixir.Coordinator.Actions.FetchOpenIssues do
     name: "fetch_open_issues",
     description: "Fetches open GitHub issues and extracts structured metadata",
     schema: [
-      project_id: [type: :string, required: true]
+      project_id: [type: {:or, [:string, nil]}, default: nil]
     ]
 
   require Logger
