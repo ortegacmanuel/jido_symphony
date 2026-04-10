@@ -15,11 +15,21 @@ defmodule SymphonyElixir.Coordinator.Agent do
 
   ## Signal Routes
 
-  - `coordinator.poll` → Full analysis pipeline (fetch → classify → group → dispatch)
+  - `coordinator.poll` → Full pipeline: fetch → triage slices (LLM) → coordinate non-slices (LLM) → DAG → dispatch
   - `coordinator.review_poll` → PR review pipeline (find → extract comments → dispatch fix)
   - `coordinator.feedback_poll` → Feedback pipeline (analyze patterns → classify gaps → propose updates)
   - `coordinator.du_completed` → Mark DU done, unblock dependents
   - `coordinator.du_failed` → Cascade failure to dependent DUs
+
+  ## Two Coordination Modes
+
+  **Event model slices** (prooph board → bridge → issues with `event-model-slice` label):
+  LLM triage with project-specific architecture context. Groups into delivery units,
+  judges independent implementability, handles incremental slice arrivals.
+
+  **Everything else** (manual bugs, features, refactors):
+  open-multi-agent coordinator pattern. LLM decomposes complex issues into task DAG
+  with dependsOn edges. Simple issues pass through as single tasks.
 
   ## Design
 
@@ -51,8 +61,11 @@ defmodule SymphonyElixir.Coordinator.Agent do
       guidance_gaps: [type: {:list, :any}, default: []],
       guidance_updates_proposed: [type: :integer, default: 0],
 
-      # Delivery units
+      # Delivery units (populated by TriageSlices + CoordinateIssues)
       delivery_units: [type: {:map, :string, :any}, default: %{}],
+      triage_cache_key: [type: :any, default: nil],
+      slices_waiting: [type: {:list, :any}, default: []],
+      coordinated_tasks: [type: {:list, :any}, default: []],
 
       # DAG state
       dag: [type: :any, default: nil],
@@ -74,11 +87,16 @@ defmodule SymphonyElixir.Coordinator.Agent do
   """
   def signal_routes(_ctx) do
     [
-      # Full poll cycle: fetch issues → classify → group → build DAG → dispatch
+      # Full poll cycle:
+      # 1. Fetch all open issues from GitHub
+      # 2. Triage slices: LLM groups into DUs with project-specific context (cached)
+      # 3. Coordinate non-slices: open-multi-agent pattern (LLM decompose complex, pass-through simple)
+      # 4. Build unified DAG from both sources
+      # 5. Dispatch ready units
       {"coordinator.poll", [
         Actions.FetchOpenIssues,
-        Actions.ClassifySlicePattern,
-        Actions.IdentifyDeliveryUnits,
+        Actions.TriageSlices,
+        Actions.CoordinateIssues,
         Actions.BuildTaskDAG,
         Actions.DispatchReadyUnits
       ]},
