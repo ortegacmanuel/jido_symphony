@@ -46,11 +46,27 @@ defmodule SymphonyElixir.ProophboardBridge do
   # -- Public API --
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    project_id = Keyword.get(opts, :project_id)
+
+    name =
+      if project_id do
+        SymphonyElixir.ProjectRegistry.via(project_id, :proophboard_bridge)
+      else
+        __MODULE__
+      end
+
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   def check_now do
     GenServer.cast(__MODULE__, :check_now)
+  end
+
+  def check_now(project_id) do
+    case SymphonyElixir.ProjectRegistry.whereis(project_id, :proophboard_bridge) do
+      nil -> {:error, :not_found}
+      pid -> GenServer.cast(pid, :check_now)
+    end
   end
 
   # -- GenServer callbacks --

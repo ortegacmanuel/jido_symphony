@@ -82,6 +82,7 @@ defmodule SymphonyElixir.MixProject do
       {:yaml_elixir, "~> 2.12"},
       {:solid, "~> 1.2"},
       {:nimble_options, "~> 1.1"},
+      {:jido, "~> 2.1", override: true},
       {:jido_ghcopilot, chgeuer("jido_ghcopilot")},
       {:jido_tool_renderers, chgeuer("jido_tool_renderers")},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

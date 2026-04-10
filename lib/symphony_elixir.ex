@@ -14,7 +14,10 @@ end
 
 defmodule SymphonyElixir.Application do
   @moduledoc """
-  OTP application entrypoint that starts core supervisors and workers.
+  OTP application entrypoint.
+
+  Starts shared infrastructure (PubSub, Jido, ProjectRegistry, Dashboard),
+  then the ProjectManager which loads per-project supervision trees.
   """
 
   use Application
@@ -25,20 +28,30 @@ defmodule SymphonyElixir.Application do
     :ok = SymphonyElixir.AgentEventStore.init()
 
     children = [
+      # Shared infrastructure
       {Phoenix.PubSub, name: SymphonyElixir.PubSub},
-      {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
-      SymphonyElixir.WorkflowStore,
-      SymphonyElixir.Orchestrator,
-      SymphonyElixir.ProophboardBridge,
+      SymphonyElixir.ProjectRegistry,
+      SymphonyElixir.Jido,
+
+      # Project management (loads per-project supervisors from config)
+      SymphonyElixir.ProjectManager,
+
+      # Web + observability (shared across all projects)
       SymphonyElixir.HttpServer,
       SymphonyElixir.StatusDashboard
     ]
 
-    Supervisor.start_link(
-      children,
-      strategy: :one_for_one,
-      name: SymphonyElixir.Supervisor
-    )
+    opts = [strategy: :one_for_one, name: SymphonyElixir.Supervisor]
+
+    case Supervisor.start_link(children, opts) do
+      {:ok, pid} ->
+        # Start configured projects after supervision tree is up
+        SymphonyElixir.ProjectManager.start_configured_projects()
+        {:ok, pid}
+
+      error ->
+        error
+    end
   end
 
   @impl true

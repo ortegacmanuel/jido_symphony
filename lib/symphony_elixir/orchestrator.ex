@@ -27,6 +27,7 @@ defmodule SymphonyElixir.Orchestrator do
     """
 
     defstruct [
+      :project_id,
       :poll_interval_ms,
       :max_concurrent_agents,
       :next_poll_due_at_ms,
@@ -42,17 +43,27 @@ defmodule SymphonyElixir.Orchestrator do
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    name = Keyword.get(opts, :name, __MODULE__)
+    project_id = Keyword.get(opts, :project_id)
+
+    name =
+      if project_id do
+        SymphonyElixir.ProjectRegistry.via(project_id, :orchestrator)
+      else
+        Keyword.get(opts, :name, __MODULE__)
+      end
+
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @impl true
-  def init(_opts) do
+  def init(opts) do
+    project_id = Keyword.get(opts, :project_id)
     now_ms = System.monotonic_time(:millisecond)
 
     state = %State{
-      poll_interval_ms: Config.poll_interval_ms(),
-      max_concurrent_agents: Config.max_concurrent_agents(),
+      project_id: project_id,
+      poll_interval_ms: Config.poll_interval_ms(project_id),
+      max_concurrent_agents: Config.max_concurrent_agents(project_id),
       next_poll_due_at_ms: now_ms,
       poll_check_in_progress: false,
       codex_totals: @empty_codex_totals,
@@ -1101,11 +1112,11 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp record_session_completion_totals(state, _running_entry), do: state
 
-  defp refresh_runtime_config(%State{} = state) do
+  defp refresh_runtime_config(%State{project_id: project_id} = state) do
     %{
       state
-      | poll_interval_ms: Config.poll_interval_ms(),
-        max_concurrent_agents: Config.max_concurrent_agents()
+      | poll_interval_ms: Config.poll_interval_ms(project_id),
+        max_concurrent_agents: Config.max_concurrent_agents(project_id)
     }
   end
 

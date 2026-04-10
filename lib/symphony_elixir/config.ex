@@ -182,9 +182,9 @@ defmodule SymphonyElixir.Config do
           timeout_ms: pos_integer()
         }
 
-  @spec current_workflow() :: {:ok, workflow_payload()} | {:error, term()}
-  def current_workflow do
-    Workflow.current()
+  @spec current_workflow(String.t() | nil) :: {:ok, workflow_payload()} | {:error, term()}
+  def current_workflow(project_id \\ nil) do
+    SymphonyElixir.WorkflowStore.current(project_id)
   end
 
   @spec tracker_kind() :: tracker_kind()
@@ -210,9 +210,9 @@ defmodule SymphonyElixir.Config do
     get_in(validated_workflow_options(), [:tracker, :project_slug])
   end
 
-  @spec github_repo() :: String.t() | nil
-  def github_repo do
-    get_in(validated_workflow_options(), [:tracker, :github_repo])
+  @spec github_repo(String.t() | nil) :: String.t() | nil
+  def github_repo(project_id \\ nil) do
+    get_in(validated_workflow_options(project_id), [:tracker, :github_repo])
   end
 
   @spec auto_merge?() :: boolean()
@@ -242,9 +242,9 @@ defmodule SymphonyElixir.Config do
     get_in(validated_workflow_options(), [:tracker, :terminal_states])
   end
 
-  @spec poll_interval_ms() :: pos_integer()
-  def poll_interval_ms do
-    get_in(validated_workflow_options(), [:polling, :interval_ms])
+  @spec poll_interval_ms(String.t() | nil) :: pos_integer()
+  def poll_interval_ms(project_id \\ nil) do
+    get_in(validated_workflow_options(project_id), [:polling, :interval_ms])
   end
 
   @spec workspace_root() :: Path.t()
@@ -272,9 +272,9 @@ defmodule SymphonyElixir.Config do
     get_in(validated_workflow_options(), [:hooks, :timeout_ms])
   end
 
-  @spec max_concurrent_agents() :: pos_integer()
-  def max_concurrent_agents do
-    get_in(validated_workflow_options(), [:agent, :max_concurrent_agents])
+  @spec max_concurrent_agents(String.t() | nil) :: pos_integer()
+  def max_concurrent_agents(project_id \\ nil) do
+    get_in(validated_workflow_options(project_id), [:agent, :max_concurrent_agents])
   end
 
   @spec max_retry_backoff_ms() :: pos_integer()
@@ -491,8 +491,15 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  defp validated_workflow_options do
-    workflow_config()
+  @doc """
+  Returns all validated workflow options for a project.
+
+  This is the project-scoped entry point. All existing global accessors
+  delegate here with `project_id: nil` for backward compatibility.
+  """
+  @spec validated_workflow_options(String.t() | nil) :: map()
+  def validated_workflow_options(project_id \\ nil) do
+    workflow_config(project_id)
     |> extract_workflow_options()
     |> NimbleOptions.validate!(@workflow_options_schema)
   end
@@ -866,8 +873,8 @@ defmodule SymphonyElixir.Config do
 
   defp normalize_agent_kind(_kind), do: nil
 
-  defp workflow_config do
-    case current_workflow() do
+  defp workflow_config(project_id \\ nil) do
+    case current_workflow(project_id) do
       {:ok, %{config: config}} when is_map(config) ->
         normalize_keys(config)
 
