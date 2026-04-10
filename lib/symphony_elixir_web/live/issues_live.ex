@@ -309,10 +309,7 @@ defmodule SymphonyElixirWeb.IssuesLive do
   defp blank_to_nil(s) when is_binary(s), do: String.trim(s)
 
   defp default_project do
-    case SymphonyElixir.ProjectManager.list_projects() do
-      [first | _] -> first
-      [] -> nil
-    end
+    SymphonyElixir.ProjectLookup.default_project_id()
   end
 
   defp schedule_refresh, do: Process.send_after(self(), :refresh_issues, @refresh_ms)

@@ -53,9 +53,7 @@ defmodule SymphonyElixir.Coordinator.Actions.FetchOpenIssues do
     end
   end
 
-  defp fetch_issues(repo, project_id) do
-    gh_token_env = resolve_gh_token_env(project_id)
-
+  defp fetch_issues(repo, _project_id) do
     args = [
       "issue",
       "list",
@@ -69,14 +67,16 @@ defmodule SymphonyElixir.Coordinator.Actions.FetchOpenIssues do
       repo
     ]
 
-    env = if gh_token_env, do: [{"GH_TOKEN", gh_token_env}], else: []
+    run_gh(args)
+  end
 
+  defp run_gh(args) do
     case System.find_executable(@gh_cmd) do
       nil ->
         {:error, :gh_not_installed}
 
       gh_path ->
-        case System.cmd(gh_path, args, stderr_to_stdout: true, env: env) do
+        case System.cmd(gh_path, args, stderr_to_stdout: true) do
           {output, 0} ->
             Jason.decode(output)
 
@@ -143,13 +143,4 @@ defmodule SymphonyElixir.Coordinator.Actions.FetchOpenIssues do
       System.get_env("GITHUB_REPO")
   end
 
-  defp resolve_gh_token_env(project_id) do
-    env_key =
-      "GH_TOKEN_" <>
-        (project_id || "DEFAULT")
-        |> String.upcase()
-        |> String.replace(~r/[^A-Z0-9]/, "_")
-
-    System.get_env(env_key) || System.get_env("GH_TOKEN")
-  end
 end

@@ -6,7 +6,7 @@ defmodule SymphonyElixir.StatusDashboard do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{Config, HttpServer}
+  alias SymphonyElixir.{Config, HttpServer, ProjectLookup}
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -392,12 +392,14 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp format_project_link_lines do
     project_part =
-      case Config.linear_project_slug() do
-        project_slug when is_binary(project_slug) and project_slug != "" ->
-          colorize(linear_project_url(project_slug), @ansi_cyan)
-
-        _ ->
+      case ProjectLookup.project_ids() do
+        [] ->
           colorize("n/a", @ansi_gray)
+
+        project_ids ->
+          project_ids
+          |> Enum.join(", ")
+          |> colorize(@ansi_cyan)
       end
 
     project_line = colorize("│ Project: ", @ansi_bold) <> project_part
@@ -546,8 +548,10 @@ defmodule SymphonyElixir.StatusDashboard do
     do: dashboard_url(host, configured_port, bound_port)
 
   defp snapshot_payload do
-    if Process.whereis(Orchestrator) do
-      case Orchestrator.snapshot() do
+    orch = ProjectLookup.orchestrator(nil)
+
+    if orch do
+      case Orchestrator.snapshot(orch, 15_000) do
         %{
           running: running,
           retrying: retrying,

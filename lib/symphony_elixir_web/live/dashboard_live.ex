@@ -258,21 +258,17 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp load_payload(project_id) do
-    Presenter.state_payload(orchestrator(project_id), snapshot_timeout_ms())
-  end
+    case SymphonyElixir.ProjectLookup.orchestrator(project_id) do
+      nil ->
+        %{error: %{code: "no_project", message: "No active project. Configure one in settings."}}
 
-  defp orchestrator(project_id) do
-    case SymphonyElixir.ProjectRegistry.whereis(project_id, :orchestrator) do
-      pid when is_pid(pid) -> pid
-      nil -> Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator
+      orch ->
+        Presenter.state_payload(orch, snapshot_timeout_ms())
     end
   end
 
   defp default_project do
-    case SymphonyElixir.ProjectManager.list_projects() do
-      [first | _] -> first
-      [] -> nil
-    end
+    SymphonyElixir.ProjectLookup.default_project_id()
   end
 
   defp snapshot_timeout_ms do
